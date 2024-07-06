@@ -6,15 +6,15 @@ import re
 import sys
 from enum import Enum
 from io import BufferedReader
-from .base_slicer import BaseSlicer
+from .generic_slicer import GenericSlicer
 
-class PrusaSlicer(BaseSlicer):
+class PrusaSlicer(GenericSlicer):
     # These begin/end lines match PrusaSlicer and most of their legacy versions.
-    _opt_start_str = r"^;.*_config = begin$"
-    _opt_end_str = r"^;.*_config = end$"
+    _options_start_pattern = r"^;.*_config = begin$"
+    _options_end_pattern = r"^;.*_config = end$"
 
     """Slicer configuration key aliases (for legacy or possible slicer cross compatibility)"""
-    _opt_aliases = {
+    _option_aliases = {
         # ALIAS_NAME: NAME_USED_IN_THIS_SLICER
         # https://github.com/supermerill/SuperSlicer/blob/9f87f80cae9b613d91a3cc581661e98d5b597605/src/libslic3r/PrintConfig.cpp#L8000-L8012
         # 
@@ -221,9 +221,9 @@ class PrusaSlicer(BaseSlicer):
     # aliased values, they can also be modified by creating a lambda function here with the local option
     # name as the root key, then the aliased key in the nested dictionary
     _alias_modifiers = {
-        ("first_layer_size_compensation","elefant_foot_compensation"): lambda val: self._invert_number(val),
-        ("xy_offset_layer_0","elefant_foot_compensation"): lambda val: self._invert_number(val),
-        ("brim_gap", "brim_separation"): lambda val: self._invert_number(val)
+        ("first_layer_size_compensation","elefant_foot_compensation"): lambda option_value: self._invert_number(option_value),
+        ("xy_offset_layer_0","elefant_foot_compensation"): lambda option_value: self._invert_number(option_value),
+        ("brim_gap", "brim_separation"): lambda option_value: self._invert_number(option_value)
     }
    
 
@@ -238,45 +238,44 @@ class PrusaSlicer(BaseSlicer):
     #           the `PrintConfigDef::handle_legacy` method)
     
     def parse(self):
-        parsed_opts = {}
+        parsed_options = {}
 
         # Iterate over each line yielded from the _reverse_gcode_reader generator, adding each
-        # to the parsed_opts dictionary if needed.
+        # to the parsed_options dictionary if needed.
         for line in self._reverse_gcode_reader():
             if type(line) is dict:
-                # If the key returned is in the ignore_opts, then skip it.
-                k = list(line).pop(0)
-                if self._ignore_opts and k in self._ignore_opts:
-                    self._logger.info(f"{k} WAS fund in self._ignore_opts, skipping")
+                # If the key returned is in the ignore_options, then skip it.
+                option_name = list(line).pop(0)
+                if self._ignore_options and option_name in self._ignore_options:
+                    self._logger.info(f"{option_name} WAS fund in self._ignore_options, skipping")
                     continue
 
-                parsed_opts.update(line)
+                parsed_options.update(line)
 
-        self._opts = parsed_opts
+        self._options = parsed_options
 
     def _reverse_gcode_reader(self):
-        in_opts = False
+        in_options = False
         is_completed = False
-        opt_count = 0
-        root = self._file_manager.get_directory("gcodes")
+        options_count = 0
         try:
             """A generator that returns the lines of a file in reverse order"""
-            with open(f"{root}/{self._filename}", "rb") as fh:
+            with open(f"{self._gcode_root}/{self._filename}", "rb") as file_handle:
                 segment = None
                 offset = 0
-                fh.seek(0, os.SEEK_END)
-                file_size = remaining_size = fh.tell()
+                file_handle.seek(0, os.SEEK_END)
+                file_size = remaining_size = file_handle.tell()
 
                 while remaining_size > 0:
-                    offset = min(file_size, offset + self._buf_size)
-                    fh.seek(file_size - offset)
-                    buffer = fh.read(min(remaining_size, self._buf_size))
+                    offset = min(file_size, offset + self._buffer_size)
+                    file_handle.seek(file_size - offset)
+                    buffer = file_handle.read(min(remaining_size, self._buffer_size))
 
                     # remove file's last "\n" if it exists, only for the first buffer
                     if remaining_size == file_size and buffer[-1] == ord("\n"):
                         buffer = buffer[:-1]
 
-                    remaining_size -= self._buf_size
+                    remaining_size -= self._buffer_size
                     lines = buffer.split("\n".encode())
 
                     # append last chunk's segment to this chunk's last line
@@ -289,15 +288,15 @@ class PrusaSlicer(BaseSlicer):
                     # yield lines in this chunk except the segment
                     for line in reversed(lines):
                         # only decode on a parsed line, to avoid utf-8 decode error
-                        l = self._handle_line(line)
+                        this_line = self._handle_line(line)
 
                         # If we've reached the ending line (which is the line that contains 
                         # prusaslicer_config = 'begin' since were reading it in reverse order), 
                         # then determine what exception to raise..
-                        if l is self.IterStatus.END:
+                        if this_line is self.IterStatus.END:
                             # if we've somehow come here without ever having hit the begin
                             # line, then raise an EOF.
-                            if in_opts is False:
+                            if in_options is False:
                                 raise EOFError("Encountered ending line without ever being in the footer")
 
                             # Otherwise, end the generator
@@ -305,31 +304,31 @@ class PrusaSlicer(BaseSlicer):
 
                         # If we've come across the beginning line (or prusaslicer_config = 'end"), 
                         # then verify this was the first time.
-                        if l is self.IterStatus.BEGIN:
-                            if in_opts is True:
+                        if this_line is self.IterStatus.BEGIN:
+                            if in_options is True:
                                 raise ValueError("Encountered the beginning line while already in options")
 
-                            in_opts = True
+                            in_options = True
                             continue
 
-                        if type(l) is dict:
-                            opt_count = opt_count+1
-                            yield l
+                        if type(this_line) is dict:
+                            options_count = options_count+1
+                            yield this_line
 
                 # Don't yield None if the file was empty
                 if segment is not None:
-                    s = self._handle_line(segment)
-                    if s is self.IterStatus.END:
+                    this_line = self._handle_line(segment)
+                    if this_line is self.IterStatus.END:
                         raise GeneratorExit("Encountered ending")
 
-                    if type(s) is dict:
-                        opt_count = opt_count+1
-                        yield s
+                    if type(this_line) is dict:
+                        options_count = options_count+1
+                        yield this_line
 
         except GeneratorExit as ge:
             pass
         finally:
-            if opt_count == 0:
+            if options_count == 0:
                 raise EOFError("No options found")
 
     def _parse_line(self, line:str):
@@ -347,10 +346,10 @@ class PrusaSlicer(BaseSlicer):
     def _handle_line(self, line):
         line = line.decode("utf-8")
 
-        if self.is_opts_start(line):
+        if self.is_options_start(line):
             return self.IterStatus.END
 
-        if self.is_opts_end(line):
+        if self.is_options_end(line):
             return self.IterStatus.BEGIN
 
         parsed_line = self._parse_line(line=line)
@@ -359,3 +358,7 @@ class PrusaSlicer(BaseSlicer):
             return self.IterStatus.NONE
 
         return parsed_line
+
+
+if __name__ == "__main__" and __package__ is None:
+    __package__ = "slicers.prusa_slicer.PrusaSlicer"

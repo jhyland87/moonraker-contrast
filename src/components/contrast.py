@@ -29,14 +29,14 @@ if TYPE_CHECKING:
     from ..confighelper import ConfigHelper
     from .file_manager.file_manager import FileManager, MetadataStorage
 
-from .slicers.base_slicer  import BaseSlicer 
+from .slicers.generic_slicer import GenericSlicer 
 from .slicers.prusa_slicer import PrusaSlicer 
-from .slicers.cura_slicer  import CuraSlicer 
-from .slicers.orca_slicer  import OrcaSlicer 
+from .slicers.cura_slicer import CuraSlicer 
+from .slicers.orca_slicer import OrcaSlicer 
 
 logging.basicConfig(stream=sys.stderr, level=logging.INFO)
 
-class Slicer:
+class Contrast:
 
     """A class for handling all the /server/files/slicer resource endpoints
 
@@ -84,19 +84,20 @@ class Slicer:
     _gcode_metadata: MetadataStorage
     """used to store the MetadataStorage from Moonraker"""
 
-    _config: ConfigHelper
+    _moonraker_config: ConfigHelper
     """instance of Moonrakers ConfigHelper"""
 
     def __init__(self, config):
         self._logger = logging.getLogger("slicer")
 
-        self._config = config
+        self._moonraker_config = config
 
-        self._server = self._config.get_server()
+        self._server = self._moonraker_config.get_server()
 
-        self.name = self._config.get_name()
+        self.name = self._moonraker_config.get_name()
 
         self._file_manager = self._server.lookup_component("file_manager")
+        self._gcodes_root = self._file_manager.get_directory("gcodes")
 
         self._gcode_metadata = self._file_manager.get_metadata_storage()
 
@@ -128,33 +129,32 @@ class Slicer:
             The data (ideally object) to be returned
         """
 
-        file_l = web_request.get_str("left")
-        file_r = web_request.get_str("right")
-        scan = web_request.get_boolean("scan", True)
-        gcodes_dir = self._file_manager.get_directory("gcodes")
+        file_left = web_request.get_str("left")
+        file_right = web_request.get_str("right")
+        force_scan = web_request.get_boolean("scan", True)
 
-        meta_l = self._get_metadata(file_l)
+        meta_left = self._get_metadata(file_left)
 
-        if "slicer_options" not in meta_l:
-            if not scan:
-                return {"error": f"No slicer_options found for left file {file_l}"}
-            self._retrieve_opts(file_l)
+        if "slicer_options" not in meta_left:
+            if not force_scan:
+                return {"error": f"No slicer_options found for left file {file_left}"}
+            self._retrieve_options(file_left)
 
-            meta_l = self._get_metadata(file_l)
-            if "slicer_options" not in meta_l:
-                return {"error": f"No slicer_options found for left file {file_l}, and scan did not save slicer_options"}
+            meta_left = self._get_metadata(file_left)
+            if "slicer_options" not in meta_left:
+                return {"error": f"No slicer_options found for left file {file_left}, and scan did not save slicer_options"}
 
 
-        opts_l = meta_l.get("slicer_options")
+        options_left = meta_left.get("slicer_options")
 
-        meta_r = self._get_metadata(file_r)
+        meta_right = self._get_metadata(file_right)
 
-        if "slicer_options" not in meta_r:
-            return {"error": f"No slicer_options found in metadata for right file {file_r}"}
+        if "slicer_options" not in meta_right:
+            return {"error": f"No slicer_options found in metadata for right file {file_right}"}
 
-        opts_r = meta_r.get("slicer_options")
+        options_right = meta_right.get("slicer_options")
 
-        return self.summarize(opts_l, opts_r)
+        return self.summarize(options_left, options_right)
 
     async def _handle_slicer_compare_request(self, web_request: WebRequest) -> Dict:
         """Gcode slicer option comparison web request handler
@@ -172,76 +172,75 @@ class Slicer:
             The data (ideally object) to be returned
         """
 
-        file_l = web_request.get_str("left")
-        file_r = web_request.get_str("right")
-        out_fmt = web_request.get_str("format", None)
+        file_left = web_request.get_str("left")
+        file_right = web_request.get_str("right")
+        output_format = web_request.get_str("format", None)
         compat_mode = web_request.get_boolean("compatibility", True)
-        inc_all = web_request.get_boolean("all", True)
+        include_all_options = web_request.get_boolean("all", True)
 
-        gcodes_dir = self._file_manager.get_directory("gcodes")
 
-        meta_l = self._get_metadata(file_l)
+        meta_left = self._get_metadata(file_left)
 
-        if not meta_l or "slicer_options" not in meta_l:
-            return {"error": f"No metadata found for left file {file_l}"}
+        if not meta_left or "slicer_options" not in meta_left:
+            return {"error": f"No metadata found for left file {file_left}"}
 
-        opts_l = meta_l.get("slicer_options")
+        options_left = meta_left.get("slicer_options")
 
-        meta_r = self._get_metadata(file_r)
+        meta_right = self._get_metadata(file_right)
 
-        if not meta_r or "slicer_options" not in meta_r:
+        if not meta_right or "slicer_options" not in meta_right:
 
-            return {"error": f"No slicer_options found in metadata for right file {file_r}"}
+            return {"error": f"No slicer_options found in metadata for right file {file_right}"}
 
-        opts_r = meta_r.get("slicer_options")
+        options_right = meta_right.get("slicer_options")
 
-        if out_fmt == "itemized":
+        if output_format == "itemized":
             # Itemized mode will split up the diff in a format that each value is stored under a
             # key that matches the option value
-            slicer_r = self._get_slicer_obj(file_r)
+            slicer_right = self._get_slicer_obj(file_right)
 
             results = {}
 
-            for name_l, value_l in opts_l.items():
-                opt_r = slicer_r.get_opt(name_l, True)
+            for name_left, value_left in options_left.items():
+                option_right = slicer_right.get_option(name_left, True)
 
-                if not opt_r or type(opt_r) is not dict:
+                if not option_right or type(option_right) is not dict:
                     
-                    if inc_all is True:
+                    if include_all_options is True:
                         # If the opt doesn't exist, but were including everything, then add a new
-                        # results entry that has no `right` key, and a null `opt_r` (to
+                        # results entry that has no `right` key, and a null `option_right` (to
                         # indicate that it doesn't exist)
-                        results[name_l] = {"left": value_l, "right_opt": None}
+                        results[name_left] = {"left": value_left, "right_opt": None}
 
                     continue
 
-                value_r =  opt_r.get("value", None)
+                value_right =  option_right.get("value", None)
 
-                if value_l == value_r:
+                if value_left == value_right:
                     continue
 
-                result = {"left": value_l, "right": value_r}
+                result = {"left": value_left, "right": value_right}
 
-                if name_l != opt_r.get("name"):
-                    name_r = opt_r.get("name")
+                if name_left != option_right.get("name"):
+                    name_right = option_right.get("name")
 
-                    result.update(right_opt=name_r)
+                    result.update(right_opt=name_right)
 
-                    del opts_r[name_r]
+                    del options_right[name_right]
 
-                results[name_l] =  result
+                results[name_left] =  result
 
-            if inc_all is True:
+            if include_all_options is True:
                 # If there are any keys left in the right config, then those are values that didn't exist on the
                 # left (even with aliases). Add those options with no left value.
-                for name_r, value_r in opts_r.items():
-                    results[name_r] = {"left": None, "right": value_r}
+                for name_right, value_right in options_right.items():
+                    results[name_right] = {"left": None, "right": value_right}
 
             return results
         
-        metadata = {"left": meta_l, "right": meta_r}
+        metadata = {"left": meta_left, "right": meta_right}
 
-        results = {"metadata": metadata, "diff": self.diff(opts_l, opts_r)}
+        results = {"metadata": metadata, "diff": self.diff(options_left, options_right)}
         return results
         
     async def _handle_slicer_configdata_request(self, web_request: WebRequest) -> Dict:
@@ -308,7 +307,7 @@ class Slicer:
                 "slicer_options":slicer_module.get_options()}
 
 
-    def _retrieve_opts(self, filename: str, save: bool = True):
+    def _retrieve_options(self, filename: str, save: bool = True):
         slicer_module = self._get_slicer_obj(filename)
 
         slicer_module.parse()
@@ -413,9 +412,8 @@ class Slicer:
 
         self._logger.info(f"Gcode file {filename} was sliced with {slicer_name}")
 
-        gcodes_dir = self._file_manager.get_directory("gcodes")
 
-        file_path = f"{gcodes_dir}/{filename}"
+        file_path = f"{self._gcodes_root}/{filename}"
 
         return globals()[slicer_name]( 
                 filename=file_path, 
@@ -424,15 +422,15 @@ class Slicer:
             )
     
     def summarize(self, left: Dict, right: Dict) -> Dict:
-        opts_l = set(left.keys())
-        opts_r = set(right.keys())
+        left_options = set(left.keys())
+        right_options = set(right.keys())
 
-        shared_keys = opts_l.intersection(opts_r)
-        added = opts_l-opts_r
-        removed = opts_r-opts_l
+        shared_keys = left_options.intersection(right_options)
+        added = left_options-right_options
+        removed = right_options-left_options
 
-        modified = {o: (left[o], right[o]) for o in shared_keys if left[o] != right[o]}
-        same = set(o for o in shared_keys if left[o] == right[o])
+        modified = {option: (left[option], right[option]) for option in shared_keys if left[option] != right[option]}
+        same = set(option for option in shared_keys if left[option] == right[option])
 
         return {
             "added":list(added), 
@@ -490,5 +488,5 @@ class Slicer:
     def _sort_dict(self, data: Dict) -> Dict:
         return dict(sorted(data.items()))
 
-def load_component(config: ConfigHelper) -> Slicer:
-    return Slicer(config)
+def load_component(config: ConfigHelper) -> Contrast:
+    return Contrast(config)

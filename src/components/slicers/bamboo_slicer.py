@@ -15,13 +15,10 @@ from typing import (
 )
 
 class BambuStudio(object):
-    _file: str
-    _matched_data = {}
-    _parse_reversed: bool = True
-    _opt_start_str: str = r"^;.*_config = begin$"
-    _opt_end_str: str = r"^;.*_config = end$"
+    _options_start_pattern: str = r"^;.*_config = begin$"
+    _options_end_pattern: str = r"^;.*_config = end$"
 
-    _opt_aliases = {
+    _option_aliases = {
         # These associations were taken from the legacy handler, mostly:
         # https://github.com/bambulab/BambuStudio/blob/60a792b76cd39a69970608d6346dd134d20ee663/src/libslic3r/PrintConfig.cpp#L4614-L4739
         "enable_wipe_tower": "enable_prime_tower",
@@ -57,7 +54,10 @@ class BambuStudio(object):
         return self._matched_data.get("slicer", None)
 
     def parse(self) -> Any:
-        print(f"Parsing gcode made by {self._matched_data.get("slicer", None)}")
+        #print(f"Parsing gcode made by {self._matched_data.get("slicer", None)}")
         print(f"\tReverse parse: {self._parse_reversed}")
-        print(f"\tConfig start line: {self._opt_start_str}")
-        print(f"\tConfig end line: {self._opt_end_str}")
+        print(f"\tConfig start line: {self._options_start_pattern}")
+        print(f"\tConfig end line: {self._options_end_pattern}")
+
+if __name__ == "__main__" and __package__ is None:
+    __package__ = "slicers.bamboo_slicer.BambooSlicer"
