@@ -1,4 +1,4 @@
-# Moonraker Comparator
+# Moonraker Contrast (for gcode)
 
 ## _WORK IN PROGRESS_
 
