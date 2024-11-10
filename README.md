@@ -1,3 +1,8 @@
+> :warning: **Its a bit buggy**: I wrote this when I only had the Sonic Pad hooked up to my E3S1P, and it worked great. But after getting a K1C (and putting Klipper on an RPi) I see it has a few bugs with up-to-date klipper versions. The comparison logic is also a bit buggy, but that can easily be fixed. Also, the comparison logic with gcode files generated from non-prusa slicers was done using gcode examples provided to me by other users in the community, as such, the versions/format might not be the most up to date either.
+>
+> I will fix all these bugs when I have time to do so.
+
+
 # Moonraker Contrast (for gcode)
 
 ## _WORK IN PROGRESS_
