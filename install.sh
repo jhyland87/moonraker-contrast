@@ -1,11 +1,13 @@
-#!/usr/bin/env bash
+#!/bin/sh
 # moonraker-contrast installer (idempotent, safe to re-run).
 #
-#   curl -sSL https://raw.githubusercontent.com/jhyland87/moonraker-contrast/v2/install.sh | bash
+#   curl -sSL https://raw.githubusercontent.com/jhyland87/moonraker-contrast/v2/install.sh | sh
 #
 # Works on a standard Debian/Raspberry Pi Klipper install and on embedded
 # printers running the Creality Helper Script (K1/K1C/K2, Buildroot + init.d),
 # which put everything under /usr/data instead of $HOME.
+#
+# POSIX sh only -- Creality firmware ships busybox ash, not bash.
 #
 # Overridable via environment:
 #   MOONRAKER_VENV       Moonraker's virtualenv               (auto-detected)
@@ -16,7 +18,7 @@
 #   REPO_URL             git origin
 #   REPO_BRANCH          branch to install from               (v2)
 #   MOONRAKER_SERVICE    systemd service name                 (moonraker)
-set -euo pipefail
+set -eu
 
 REPO_URL="${REPO_URL:-https://github.com/jhyland87/moonraker-contrast.git}"
 # TEMPORARY: v2 lives on its own branch. Once v2 merges to main, drop REPO_BRANCH
@@ -45,8 +47,8 @@ maybe_sudo() {
 # This only picks which candidate paths are tried first -- both sets are always
 # tried, so an unrecognised distro still resolves.
 detect_platform() {
-    if [ -n "${MOONRAKER_PLATFORM:-}" ]; then echo "$MOONRAKER_PLATFORM"; return; fi
-    local ids=""
+    if [ -n "${MOONRAKER_PLATFORM:-}" ]; then echo "$MOONRAKER_PLATFORM"; return 0; fi
+    ids=""
     if [ -r "$OS_RELEASE_FILE" ]; then
         # Subshell: os-release sets NAME/VERSION/... which we don't want here.
         # shellcheck source=/dev/null
@@ -60,23 +62,44 @@ detect_platform() {
 }
 PLATFORM="$(detect_platform)"
 
-if [ "$PLATFORM" = "embedded" ]; then
-    VENV_CANDIDATES=("/usr/data/moonraker/moonraker-env" "${HOME}/moonraker-env" \
-                     "${HOME}/moonraker/venv" "${HOME}/.moonraker-env")
-    CONFIG_CANDIDATES=("/usr/data/printer_data/config" "${HOME}/printer_data/config" \
-                       "${HOME}/klipper_config")
-    COMPONENT_CANDIDATES=("/usr/data/moonraker/moonraker/moonraker/components" \
-                          "${HOME}/moonraker/moonraker/components")
-    SEARCH_ROOTS=("/usr/data" "${HOME}")
-else
-    VENV_CANDIDATES=("${HOME}/moonraker-env" "${HOME}/moonraker/venv" \
-                     "${HOME}/.moonraker-env" "/usr/data/moonraker/moonraker-env")
-    CONFIG_CANDIDATES=("${HOME}/printer_data/config" "${HOME}/klipper_config" \
-                       "/usr/data/printer_data/config")
-    COMPONENT_CANDIDATES=("${HOME}/moonraker/moonraker/components" \
-                          "/usr/data/moonraker/moonraker/moonraker/components")
-    SEARCH_ROOTS=("${HOME}" "/usr/data")
-fi
+# Candidate paths, best first, emitted one per line (no arrays in POSIX sh).
+venv_candidates() {
+    if [ "$PLATFORM" = "embedded" ]; then
+        printf '%s\n' /usr/data/moonraker/moonraker-env "${HOME}/moonraker-env" \
+                      "${HOME}/moonraker/venv" "${HOME}/.moonraker-env"
+    else
+        printf '%s\n' "${HOME}/moonraker-env" "${HOME}/moonraker/venv" \
+                      "${HOME}/.moonraker-env" /usr/data/moonraker/moonraker-env
+    fi
+}
+
+config_candidates() {
+    if [ "$PLATFORM" = "embedded" ]; then
+        printf '%s\n' /usr/data/printer_data/config "${HOME}/printer_data/config" \
+                      "${HOME}/klipper_config"
+    else
+        printf '%s\n' "${HOME}/printer_data/config" "${HOME}/klipper_config" \
+                      /usr/data/printer_data/config
+    fi
+}
+
+component_candidates() {
+    if [ "$PLATFORM" = "embedded" ]; then
+        printf '%s\n' /usr/data/moonraker/moonraker/moonraker/components \
+                      "${HOME}/moonraker/moonraker/components"
+    else
+        printf '%s\n' "${HOME}/moonraker/moonraker/components" \
+                      /usr/data/moonraker/moonraker/moonraker/components
+    fi
+}
+
+search_roots() {
+    if [ "$PLATFORM" = "embedded" ]; then
+        printf '%s\n' /usr/data "${HOME}"
+    else
+        printf '%s\n' "${HOME}" /usr/data
+    fi
+}
 
 # --- 2. Find Moonraker's command line ----------------------------------------
 # One probe answers three questions: which python, which source tree, which data
@@ -84,7 +107,6 @@ fi
 #   /usr/data/moonraker/moonraker-env/bin/python \
 #     /usr/data/moonraker/moonraker/moonraker/moonraker.py -d /usr/data/printer_data
 probe_moonraker_cmdline() {
-    local ps_out matches candidate py line unit
     line=""
     # a) The running server -- authoritative, and Moonraker is up during installs.
     #    busybox ps rejects most flags, so degrade to bare `ps`.
@@ -95,13 +117,17 @@ probe_moonraker_cmdline() {
                | grep -E 'moonraker\.py|-m[[:space:]]+moonraker' || true)"
     # Other processes can merely *mention* moonraker.py (an editor, the shell
     # running this installer), so prefer a line that names a real interpreter.
+    # Heredoc rather than a pipe: a pipeline would run the loop in a subshell
+    # and lose $line.
     if [ -n "$matches" ]; then
         while IFS= read -r candidate; do
             [ -n "$candidate" ] || continue
             if [ -z "$line" ]; then line="$candidate"; fi
             py="$(printf '%s' "$candidate" | grep -oE '/[^ "]*/bin/python[0-9.]*' | head -n1 || true)"
             if [ -n "$py" ] && [ -x "$py" ]; then line="$candidate"; break; fi
-        done <<< "$matches"
+        done <<EOF
+$matches
+EOF
     fi
     # b) systemd unit.
     if [ -z "$line" ] && command -v systemctl >/dev/null 2>&1; then
@@ -112,7 +138,7 @@ probe_moonraker_cmdline() {
         for unit in /etc/init.d/S*moonraker* /etc/init.d/moonraker; do
             [ -f "$unit" ] || continue
             line="$(grep -h '/bin/python' "$unit" 2>/dev/null | head -n1 || true)"
-            [ -n "$line" ] && break
+            if [ -n "$line" ]; then break; fi
         done
     fi
     printf '%s' "$line"
@@ -123,72 +149,102 @@ MOONRAKER_CMDLINE="$(probe_moonraker_cmdline)"
 
 # -e so a pattern starting with `-` isn't read as an option.
 cmdline_field() { printf '%s' "$MOONRAKER_CMDLINE" | grep -oE -e "$1" | head -n1 || true; }
-cmdline_python()   { cmdline_field '/[^ "]*/bin/python[0-9.]*'; }
-cmdline_script()   { cmdline_field '/[^ "]*/moonraker\.py'; }
-cmdline_datapath() { cmdline_field '\-d[[:space:]]+[^ "]+' | sed -E 's/^-d[[:space:]]+//'; }
+cmdline_python() { cmdline_field '/[^ "]*/bin/python[0-9.]*'; }
+cmdline_script() { cmdline_field '/[^ "]*/moonraker\.py'; }
+
+# `-d <path>` with the flag and separating blanks trimmed off. Done with
+# parameter expansion because busybox sed predates `-E`.
+cmdline_datapath() {
+    field="$(cmdline_field '\-d[[:space:]]+[^ "]+')"
+    [ -n "$field" ] || return 0
+    field="${field#-d}"
+    while :; do
+        case "$field" in
+            " "*|"	"*) field="${field#?}" ;;
+            *) break ;;
+        esac
+    done
+    printf '%s' "$field"
+}
 
 # --- 3. Detect venv / config / components ------------------------------------
 detect_venv() {
-    if [ -n "${MOONRAKER_VENV:-}" ]; then echo "$MOONRAKER_VENV"; return; fi
-    local py cand
+    if [ -n "${MOONRAKER_VENV:-}" ]; then echo "$MOONRAKER_VENV"; return 0; fi
     py="$(cmdline_python)"
     # <venv>/bin/python -> <venv>
-    if [ -n "$py" ] && [ -x "$py" ]; then dirname "$(dirname "$py")"; return; fi
-    for cand in "${VENV_CANDIDATES[@]}"; do
-        [ -x "${cand}/bin/python" ] && { echo "$cand"; return; }
-    done
-    return 1
+    if [ -n "$py" ] && [ -x "$py" ]; then dirname "$(dirname "$py")"; return 0; fi
+    found=""
+    while IFS= read -r cand; do
+        [ -n "$cand" ] || continue
+        if [ -x "${cand}/bin/python" ]; then found="$cand"; break; fi
+    done <<EOF
+$(venv_candidates)
+EOF
+    [ -n "$found" ] || return 1
+    echo "$found"
 }
 
 detect_config() {
-    if [ -n "${MOONRAKER_CONFIG:-}" ]; then echo "$MOONRAKER_CONFIG"; return; fi
-    local data cand root found
+    if [ -n "${MOONRAKER_CONFIG:-}" ]; then echo "$MOONRAKER_CONFIG"; return 0; fi
     data="$(cmdline_datapath)"
     if [ -n "$data" ] && [ -f "${data}/config/moonraker.conf" ]; then
-        echo "${data}/config"; return
+        echo "${data}/config"
+        return 0
     fi
-    for cand in "${CONFIG_CANDIDATES[@]}"; do
-        [ -f "${cand}/moonraker.conf" ] && { echo "$cand"; return; }
-    done
-    for root in "${SEARCH_ROOTS[@]}"; do
-        [ -d "$root" ] || continue
-        found="$(find "$root" -maxdepth 4 -name moonraker.conf 2>/dev/null | head -n1 || true)"
-        [ -n "$found" ] && { dirname "$found"; return; }
-    done
-    return 1
+    found=""
+    while IFS= read -r cand; do
+        [ -n "$cand" ] || continue
+        if [ -f "${cand}/moonraker.conf" ]; then found="$cand"; break; fi
+    done <<EOF
+$(config_candidates)
+EOF
+    if [ -z "$found" ]; then
+        while IFS= read -r root; do
+            [ -d "$root" ] || continue
+            hit="$(find "$root" -maxdepth 4 -name moonraker.conf 2>/dev/null | head -n1 || true)"
+            if [ -n "$hit" ]; then found="$(dirname "$hit")"; break; fi
+        done <<EOF
+$(search_roots)
+EOF
+    fi
+    [ -n "$found" ] || return 1
+    echo "$found"
 }
 
 # Moonraker installed as a package (standard installs) can just say where it is.
 components_from_import() {
-    local dir
     dir="$("$PY" -c 'import moonraker, os; print(os.path.join(os.path.dirname(moonraker.__file__), "components"))' 2>/dev/null || true)"
-    [ -n "$dir" ] && [ -d "$dir" ] && echo "$dir"
+    if [ -n "$dir" ] && [ -d "$dir" ]; then echo "$dir"; fi
 }
 
 # Run-from-source: <src>/moonraker/moonraker.py -> <src>/moonraker/components.
 # This is how Creality printers run it, where the import above always fails.
 components_from_script() {
-    local script dir
     script="$(cmdline_script)"
     [ -n "$script" ] || return 0
     dir="$(dirname "$script")/components"
-    [ -d "$dir" ] && echo "$dir"
+    if [ -d "$dir" ]; then echo "$dir"; fi
 }
 
 detect_components() {
-    if [ -n "${MOONRAKER_COMPONENTS:-}" ]; then echo "$MOONRAKER_COMPONENTS"; return; fi
-    local dir cand
+    if [ -n "${MOONRAKER_COMPONENTS:-}" ]; then echo "$MOONRAKER_COMPONENTS"; return 0; fi
     if [ "$PLATFORM" = "embedded" ]; then
-        dir="$(components_from_script)"; [ -n "$dir" ] && { echo "$dir"; return; }
-        dir="$(components_from_import)"; [ -n "$dir" ] && { echo "$dir"; return; }
+        dir="$(components_from_script)"
+        if [ -z "$dir" ]; then dir="$(components_from_import)"; fi
     else
-        dir="$(components_from_import)"; [ -n "$dir" ] && { echo "$dir"; return; }
-        dir="$(components_from_script)"; [ -n "$dir" ] && { echo "$dir"; return; }
+        dir="$(components_from_import)"
+        if [ -z "$dir" ]; then dir="$(components_from_script)"; fi
     fi
-    for cand in "${COMPONENT_CANDIDATES[@]}"; do
-        [ -d "$cand" ] && { echo "$cand"; return; }
-    done
-    return 1
+    if [ -n "$dir" ]; then echo "$dir"; return 0; fi
+    found=""
+    while IFS= read -r cand; do
+        [ -n "$cand" ] || continue
+        if [ -d "$cand" ]; then found="$cand"; break; fi
+    done <<EOF
+$(component_candidates)
+EOF
+    [ -n "$found" ] || return 1
+    echo "$found"
 }
 
 VENV="$(detect_venv)"      || die "Could not find Moonraker's venv. Set MOONRAKER_VENV=/path/to/venv and re-run."
@@ -202,7 +258,6 @@ COMPONENTS="$(detect_components)" \
 # Clone beside the data dir: /usr/data/printer_data/config -> /usr/data, so an
 # embedded printer gets the repo on its big partition rather than in /root.
 repo_parent() {
-    local parent
     parent="$(dirname "$CONFIG")"
     case "$(basename "$parent")" in
         *printer*data*|*_data) dirname "$parent" ;;
@@ -243,7 +298,7 @@ if ! "$PY" -c 'import moonraker_contrast' >/dev/null 2>&1; then
     # Old pip/setuptools can't do a PEP 660 editable install of a pyproject-only
     # package. Ours is pure-stdlib with no dependencies, so a path file does.
     SITE_DIR="$("$PY" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])' 2>/dev/null || true)"
-    [ -n "$SITE_DIR" ] && [ -d "$SITE_DIR" ] \
+    { [ -n "$SITE_DIR" ] && [ -d "$SITE_DIR" ]; } \
         || die "pip install failed and site-packages for ${PY} could not be located"
     printf '%s\n' "${REPO_PATH}/src" > "${SITE_DIR}/moonraker-contrast.pth"
     log "Added ${SITE_DIR}/moonraker-contrast.pth -> ${REPO_PATH}/src"
@@ -268,7 +323,8 @@ fi
 # --- 8. Add config sections (grep-guarded for idempotency) -------------------
 CONF="${CONFIG}/moonraker.conf"
 add_section() {
-    local marker="$1" body="$2"
+    marker="$1"
+    body="$2"
     if grep -qE "^\[${marker}\]" "$CONF" 2>/dev/null; then
         log "moonraker.conf already has [${marker}], skipping"
     else
@@ -291,7 +347,6 @@ install_script: install.sh"
 
 # --- 9. Restart Moonraker ----------------------------------------------------
 restart_initd() {
-    local unit
     for unit in /etc/init.d/S*moonraker* /etc/init.d/moonraker; do
         [ -x "$unit" ] || continue
         log "Restarting ${unit}"

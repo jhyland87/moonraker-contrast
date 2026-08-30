@@ -22,7 +22,7 @@ printer running the [Creality Helper Script](https://github.com/Guilouz/Creality
 (K1/K1C/K2), where everything lives under `/usr/data` instead of `$HOME`:
 
 ```sh
-curl -sSL https://raw.githubusercontent.com/jhyland87/moonraker-contrast/v2/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/jhyland87/moonraker-contrast/v2/install.sh | sh
 ```
 
 The installer is idempotent (safe to re-run). It:
