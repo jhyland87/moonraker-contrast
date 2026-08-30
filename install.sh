@@ -155,7 +155,7 @@ cmdline_script() { cmdline_field '/[^ "]*/moonraker\.py'; }
 # `-d <path>` with the flag and separating blanks trimmed off. Done with
 # parameter expansion because busybox sed predates `-E`.
 cmdline_datapath() {
-    field="$(cmdline_field '\-d[[:space:]]+[^ "]+')"
+    field="$(cmdline_field '-d[[:space:]]+[^ "]+')"
     [ -n "$field" ] || return 0
     field="${field#-d}"
     while :; do
