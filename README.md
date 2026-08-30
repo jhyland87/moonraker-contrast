@@ -17,7 +17,9 @@ compensation*) are aligned through a **user-editable mapping file**.
 
 ## Install
 
-On the machine running Moonraker:
+On the machine running Moonraker — a Raspberry Pi / Debian host, or a Creality
+printer running the [Creality Helper Script](https://github.com/Guilouz/Creality-Helper-Script)
+(K1/K1C/K2), where everything lives under `/usr/data` instead of `$HOME`:
 
 ```sh
 curl -sSL https://raw.githubusercontent.com/jhyland87/moonraker-contrast/v2/install.sh | bash
@@ -25,18 +27,24 @@ curl -sSL https://raw.githubusercontent.com/jhyland87/moonraker-contrast/v2/inst
 
 The installer is idempotent (safe to re-run). It:
 
-1. detects Moonraker's virtualenv and printer config dir,
-2. clones this repo to `~/moonraker-contrast`,
-3. `pip install -e`'s the `moonraker_contrast` library into the venv,
+1. identifies the platform (`/etc/os-release`) and finds Moonraker's virtualenv,
+   config dir, and components dir — primarily by reading the running Moonraker
+   process's command line, falling back to the known layouts for each platform,
+2. clones this repo beside your `printer_data` dir (`~/moonraker-contrast`, or
+   `/usr/data/moonraker-contrast` on a Creality printer),
+3. `pip install -e`'s the `moonraker_contrast` library into the venv (falling
+   back to a `.pth` path file where pip is too old for an editable install),
 4. symlinks the component into `moonraker/components/`,
 5. installs a default `slicer_mappings.cfg` into your config dir (never
    overwriting an existing one),
 6. adds `[slicer_compare]` and an `[update_manager moonraker-contrast]` section
    to `moonraker.conf`,
-7. restarts Moonraker.
+7. restarts Moonraker (`systemctl` on a standard host,
+   `/etc/init.d/S56moonraker_service` on a Creality printer).
 
-Override detection with env vars if needed:
-`MOONRAKER_VENV`, `MOONRAKER_CONFIG`, `REPO_PATH`, `MOONRAKER_SERVICE`.
+Override detection with env vars if needed: `MOONRAKER_VENV`, `MOONRAKER_CONFIG`,
+`MOONRAKER_COMPONENTS`, `MOONRAKER_PLATFORM` (`embedded`/`standard`), `REPO_PATH`,
+`REPO_BRANCH`, `MOONRAKER_SERVICE`.
 
 ## API
 
@@ -91,8 +99,9 @@ Websocket equivalents use the derived method names `server.slicer.compare` and
 
 ## Adding / changing setting mappings
 
-Edit `~/printer_data/config/slicer_mappings.cfg` (INI, same format as
-`moonraker.conf`). Changes take effect immediately — no restart needed.
+Edit `slicer_mappings.cfg` in your config dir — `~/printer_data/config/` on a
+standard install, `/usr/data/printer_data/config/` on a Creality printer (INI,
+same format as `moonraker.conf`). Changes take effect immediately — no restart needed.
 
 ```ini
 [canonical elephant_foot_compensation]
