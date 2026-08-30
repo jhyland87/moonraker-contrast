@@ -1,0 +1,64 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "moonraker-contrast"
+version = "0.1.0"
+description = "Compare the slicer settings embedded in two gcode files, exposed as a Moonraker API plugin."
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "GPL-3.0-or-later" }
+authors = [{ name = "jhyland87" }]
+keywords = ["moonraker", "klipper", "3d-printing", "gcode", "slicer", "prusaslicer", "orcaslicer", "bambustudio"]
+# stdlib only (re, configparser, pathlib, gzip) - keeps the Moonraker venv clean.
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[project.urls]
+Homepage = "https://github.com/jhyland87/moonraker-contrast"
+Repository = "https://github.com/jhyland87/moonraker-contrast"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 88
+src = ["src", "tests"]
+exclude = [".venv", "build", "dist"]
+
+[tool.ruff.lint]
+# Mirror Moonraker's flake8 ignores (W503/W504 are flake8-only line-break
+# rules that Ruff does not implement, so they're omitted here).
+ignore = ["E226", "E301", "E302", "E303"]
+
+[tool.pylint.main]
+# Let pylint resolve the first-party `moonraker_contrast` package when it lints
+# the component shim (which lives outside src/).
+init-hook = "import sys; sys.path.insert(0, 'src')"
+
+[tool.pylint."messages control"]
+# Parser/config/dataclass-style classes intentionally expose few methods.
+disable = ["too-few-public-methods"]
+# Explicitly keep unused-import alerts on (on by default, pinned here so a
+# future broad disable can't silently turn them off).
+enable = ["unused-import"]
+
+[tool.pylint.format]
+max-line-length = 88
+
+[tool.pylint.design]
+max-args = 8
+max-positional-arguments = 8
+max-locals = 20
+
+[tool.pyright]
+include = ["src", "component"]
+exclude = ["**/__pycache__", ".venv"]
+# The shim imports Moonraker internals that only exist on the printer.
+reportMissingImports = "none"
