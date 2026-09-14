@@ -38,7 +38,7 @@ if TYPE_CHECKING:
     from ..common import WebRequest
     from .file_manager.file_manager import FileManager
 
-_VALID_MODES = {"raw", "values"}
+_VALID_MODES = {"text", "values"}
 
 
 class ConfigCompare:

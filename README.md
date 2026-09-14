@@ -109,7 +109,7 @@ A separate resource compares two Klipper/Moonraker config files (`printer.cfg`,
 | ------- | ------ | --------------------------------------------------------- |
 | `file1` | string | config path relative to the config root                   |
 | `file2` | string | config path relative to the config root                   |
-| `mode`  | string | `"values"` (default) or `"raw"`                            |
+| `mode`  | string | `"values"` (default) or `"text"`                           |
 
 `mode=values` parses both files as INI and diffs the settings — files that only
 differ in comments, whitespace, or section ordering report **no** differences.
@@ -151,19 +151,33 @@ Response against two different files (abridged):
 }
 ```
 
-`mode=raw` skips parsing entirely and returns a literal unified text diff — every
-comment, blank line, and reordered section counts:
+`mode=text` skips parsing entirely and returns a structured, line-by-line JSON
+diff of the literal file contents — every comment, blank line, and reordered
+section counts. Changes are grouped into `hunks` (like a unified diff), each a
+run of `context`/`remove`/`add` lines with 1-indexed line numbers on whichever
+side(s) they exist:
 
 ```json
 {
   "left": {"file":"printer-20250801_203831.cfg"},
   "right": {"file":"printer.cfg"},
-  "mode": "raw",
-  "raw": {
+  "mode": "text",
+  "text": {
     "identical": false,
-    "diff": "--- printer-20250801_203831.cfg\n+++ printer.cfg\n@@ ...",
-    "lines_added": 34,
-    "lines_removed": 12
+    "lines_added": 1,
+    "lines_removed": 1,
+    "hunks": [
+      {
+        "left_start": 1, "left_lines": 4,
+        "right_start": 1, "right_lines": 4,
+        "lines": [
+          {"type":"context","left_line":1,"right_line":1,"text":"[extruder]"},
+          {"type":"remove","left_line":2,"right_line":null,"text":"pressure_advance: 0.04"},
+          {"type":"add","left_line":null,"right_line":2,"text":"pressure_advance: 0.06"},
+          {"type":"context","left_line":3,"right_line":3,"text":"nozzle_diameter: 0.4"}
+        ]
+      }
+    ]
   }
 }
 ```

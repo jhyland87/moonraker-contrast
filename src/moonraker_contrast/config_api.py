@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from .config_diff import diff_raw, diff_values
+from .config_diff import diff_text, diff_values
 from .config_parse import parse_config_file
 
 __all__ = ["compare_config_files", "scan_config_file"]
@@ -41,9 +41,10 @@ def compare_config_files(
     left_name: Optional[str] = None,
     right_name: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Compare two config files and return either a raw or values diff.
+    """Compare two config files and return either a text or values diff.
 
-    ``mode="raw"`` returns a literal unified text diff; ``mode="values"``
+    ``mode="text"`` returns a structured, line-by-line JSON diff of the literal
+    file contents (comments, whitespace, ordering all count); ``mode="values"``
     (default) returns a semantic diff of parsed settings -- files that differ
     only in comments, whitespace, or section ordering report no differences.
     """
@@ -57,10 +58,10 @@ def compare_config_files(
         "mode": mode,
     }
 
-    if mode == "raw":
+    if mode == "text":
         left_text = left_path.read_text(encoding="utf-8", errors="ignore")
         right_text = right_path.read_text(encoding="utf-8", errors="ignore")
-        response["raw"] = diff_raw(left_text, right_text, left_name, right_name)
+        response["text"] = diff_text(left_text, right_text)
         return response
 
     left_values = parse_config_file(left_path)

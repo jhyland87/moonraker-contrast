@@ -47,30 +47,32 @@ def test_reformatted_file_reports_no_values_diff():
     assert result["only_right"] == {}
 
 
-def test_reformatted_file_reports_raw_diff():
+def test_reformatted_file_reports_text_diff():
     result = config_api.compare_config_files(
-        gfile("config_a.cfg"), gfile("config_a_reformatted.cfg"), mode="raw",
+        gfile("config_a.cfg"), gfile("config_a_reformatted.cfg"), mode="text",
     )
-    assert result["mode"] == "raw"
-    assert result["raw"]["identical"] is False
-    assert result["raw"]["lines_added"] > 0
-    assert result["raw"]["lines_removed"] > 0
+    assert result["mode"] == "text"
+    assert result["text"]["identical"] is False
+    assert result["text"]["lines_added"] > 0
+    assert result["text"]["lines_removed"] > 0
+    assert len(result["text"]["hunks"]) > 0
 
 
-def test_identical_file_raw_diff_reports_identical():
+def test_identical_file_text_diff_reports_identical():
     result = config_api.compare_config_files(
-        gfile("config_a.cfg"), gfile("config_a.cfg"), mode="raw",
+        gfile("config_a.cfg"), gfile("config_a.cfg"), mode="text",
     )
-    assert result["raw"]["identical"] is True
+    assert result["text"]["identical"] is True
+    assert result["text"]["hunks"] == []
 
 
-def test_garbled_file_raises_in_values_mode_but_not_raw_mode():
+def test_garbled_file_raises_in_values_mode_but_not_text_mode():
     with pytest.raises(ConfigParseError):
         config_api.compare_config_files(
             gfile("config_a.cfg"), gfile("config_garbled.cfg"), mode="values",
         )
-    # Raw mode never parses INI, so a garbled file is still comparable as text.
+    # Text mode never parses INI, so a garbled file is still comparable as text.
     result = config_api.compare_config_files(
-        gfile("config_a.cfg"), gfile("config_garbled.cfg"), mode="raw",
+        gfile("config_a.cfg"), gfile("config_garbled.cfg"), mode="text",
     )
-    assert result["raw"]["identical"] is False
+    assert result["text"]["identical"] is False
