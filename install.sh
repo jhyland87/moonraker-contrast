@@ -1,7 +1,7 @@
 #!/bin/sh
 # moonraker-contrast installer (idempotent, safe to re-run).
 #
-#   curl -sSL https://raw.githubusercontent.com/jhyland87/moonraker-contrast/main/install.sh | sh
+#   wget -O - https://raw.githubusercontent.com/jhyland87/moonraker-contrast/main/install.sh | sh
 #
 # Works on a standard Debian/Raspberry Pi Klipper install and on embedded
 # printers running the Creality Helper Script (K1/K1C/K2, Buildroot + init.d),
@@ -282,14 +282,37 @@ else
 fi
 
 # --- 5. Put moonraker_contrast on Moonraker's import path --------------------
+run_pip() {
+    if [ -x "$PIP" ]; then
+        "$PIP" "$@"
+    elif "$PY" -m pip --version >/dev/null 2>&1; then
+        "$PY" -m pip "$@"
+    else
+        return 127
+    fi
+}
+
+# setuptools < 64 can't do a PEP 660 `build_editable`, so pip silently falls
+# back to a legacy `setup.py develop` shim that only reads metadata from
+# setup.py/setup.cfg -- not our pyproject.toml `[project]` table -- and
+# installs the package as "UNKNOWN 0.0.0" (harmless today since the package is
+# still importable, but pip's own deprecation notice says the legacy fallback
+# itself goes away in a future release, at which point the install would fail
+# outright instead of just mislabeling itself).
+setuptools_major="$("$PY" -c 'import setuptools; print(setuptools.__version__.split(".")[0])' 2>/dev/null || echo 0)"
+if [ "${setuptools_major:-0}" -lt 64 ] 2>/dev/null; then
+    log "Upgrading setuptools in ${VENV} (>=64 needed for a proper editable install)"
+    run_pip install -U 'setuptools>=64' wheel || warn "could not upgrade setuptools; editable install may report as UNKNOWN"
+fi
+
 # Editable install so git pull updates take effect without reinstalling.
 log "Installing moonraker_contrast into ${VENV}"
-if [ -x "$PIP" ]; then
-    "$PIP" install -e "$REPO_PATH" || warn "pip install failed"
-elif "$PY" -m pip --version >/dev/null 2>&1; then
-    "$PY" -m pip install -e "$REPO_PATH" || warn "pip install failed"
-else
+run_pip install -e "$REPO_PATH"
+pip_status=$?
+if [ "$pip_status" -eq 127 ]; then
     warn "No pip found in ${VENV}"
+elif [ "$pip_status" -ne 0 ]; then
+    warn "pip install failed"
 fi
 
 if ! "$PY" -c 'import moonraker_contrast' >/dev/null 2>&1; then
@@ -382,6 +405,38 @@ else
         || warn "Could not restart Moonraker; restart it manually to load the plugin."
 fi
 
+# Prefer a real SAVE_CONFIG backup (printer-<timestamp>.cfg) over printer.cfg
+# itself for the example, so the copy-pasted command shows an actual diff
+# instead of a trivial self-compare. Glob is lexicographic, so the last match
+# is the most recent backup; falls back to printer.cfg (self-compare) when
+# none exist yet (e.g. right after a fresh install, before any SAVE_CONFIG).
+CONFIG_CMP_FILE2="printer.cfg"
+for cand in "${CONFIG}"/printer-*.cfg; do
+    [ -f "$cand" ] || continue
+    CONFIG_CMP_FILE2="$(basename "$cand")"
+done
+
+# Same idea for the slicer-compare example: grab any two real files from the
+# gcodes root (a sibling of the config dir in Moonraker's standard layout) so
+# the copy-pasted command doesn't 404 on the "a.gcode"/"b.gcode" placeholders.
+# Falls back to those placeholders when fewer than two gcode files exist yet;
+# falls back to comparing one file against itself when exactly one exists.
+GCODES_DIR="$(dirname "$CONFIG")/gcodes"
+SLICER_CMP_FILE1="a.gcode"
+SLICER_CMP_FILE2="b.gcode"
+gcode_count=0
+for cand in "${GCODES_DIR}"/*.gcode; do
+    [ -f "$cand" ] || continue
+    gcode_count=$((gcode_count + 1))
+    if [ "$gcode_count" -eq 1 ]; then
+        SLICER_CMP_FILE1="$(basename "$cand")"
+        SLICER_CMP_FILE2="$(basename "$cand")"
+    elif [ "$gcode_count" -eq 2 ]; then
+        SLICER_CMP_FILE2="$(basename "$cand")"
+        break
+    fi
+done
+
 log "Done. Test it:"
-log "  curl -s -X POST 'http://localhost:7125/server/slicer/compare' -H 'Content-Type: application/json' -d '{\"file1\":\"a.gcode\",\"file2\":\"b.gcode\"}' | jq ."
-log "  curl -s -X POST 'http://localhost:7125/server/config/compare' -H 'Content-Type: application/json' -d '{\"file1\":\"printer.cfg\",\"file2\":\"printer-20250101_000000.cfg\"}' | jq ."
+log "  curl -X POST 'http://localhost:7125/server/slicer/compare' -H 'Content-Type: application/json' -d '{\"file1\":\"${SLICER_CMP_FILE1}\",\"file2\":\"${SLICER_CMP_FILE2}\"}' | jq ."
+log "  curl -X POST 'http://localhost:7125/server/config/compare' -H 'Content-Type: application/json' -d '{\"file1\":\"printer.cfg\",\"file2\":\"${CONFIG_CMP_FILE2}\"}' | jq ."

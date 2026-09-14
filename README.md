@@ -23,7 +23,7 @@ printer running the [Creality Helper Script](https://github.com/Guilouz/Creality
 (K1/K1C/K2), where everything lives under `/usr/data` instead of `$HOME`:
 
 ```sh
-curl -sSL https://raw.githubusercontent.com/jhyland87/moonraker-contrast/main/install.sh | sh
+wget -O - https://raw.githubusercontent.com/jhyland87/moonraker-contrast/main/install.sh | sh
 ```
 
 The installer is idempotent (safe to re-run). It:
@@ -122,13 +122,19 @@ is concerned.
 > same-line comment becomes part of the parsed value, so `values` mode can flag
 > a line as "changed" if only that trailing comment differs.
 
+`file1`/`file2` must be filenames that already exist in your config root — list
+them with `curl -s "http://PRINTER:7125/server/files/list?root=config" | jq '.result[].path'`.
+The example below self-compares `printer.cfg` (always present, so it runs as-is
+and reports no differences); substitute a real second filename — e.g. one of
+Klipper's own `printer-<timestamp>.cfg` SAVE_CONFIG backups — to see an actual diff.
+
 ```sh
 curl -s -X POST 'http://PRINTER:7125/server/config/compare' \
   -H 'Content-Type: application/json' \
-  -d '{"file1":"printer-20250801_203831.cfg","file2":"printer.cfg"}' | jq .
+  -d '{"file1":"printer.cfg","file2":"printer.cfg"}' | jq .
 ```
 
-Response (abridged):
+Response against two different files (abridged):
 
 ```json
 {
