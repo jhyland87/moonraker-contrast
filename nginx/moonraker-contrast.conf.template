@@ -1,0 +1,65 @@
+# Managed by moonraker-contrast's install.sh -- regenerated on every run.
+# Do not hand-edit; changes will be overwritten on the next install/update.
+#
+# Fully self-contained: its own map/upstream names (not Fluidd/Mainsail's
+# $connection_upgrade / apiserver) so it's always safe to drop in alongside
+# whatever else is already in the host's nginx.conf.
+
+map $http_upgrade $moonraker_contrast_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+upstream moonraker_contrast_backend {
+    server 127.0.0.1:7125;
+}
+
+server {
+    listen 4410 default_server;
+
+    access_log off;
+    error_log off;
+    gzip on;
+    gzip_vary on;
+    gzip_proxied any;
+    gzip_proxied expired no-cache no-store private auth;
+    gzip_comp_level 4;
+    gzip_buffers 16 8k;
+    gzip_http_version 1.1;
+    gzip_types text/plain text/css text/xml text/javascript application/javascript application/x-javascript application/json application/xml;
+
+    root __WEB_ROOT__;
+    index index.html;
+    server_name _;
+
+    client_max_body_size 0;
+    proxy_request_buffering off;
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    location = /index.html {
+        add_header Cache-Control "no-store, no-cache, must-revalidate";
+    }
+
+    location /websocket {
+        proxy_pass http://moonraker_contrast_backend/websocket;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $moonraker_contrast_upgrade;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_read_timeout 86400;
+    }
+
+    location ~ ^/(printer|api|access|machine|server)/ {
+        proxy_pass http://moonraker_contrast_backend$request_uri;
+        proxy_http_version 1.1;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Scheme $scheme;
+    }
+}

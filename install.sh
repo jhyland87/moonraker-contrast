@@ -14,10 +14,17 @@
 #   MOONRAKER_CONFIG     printer config dir w/ moonraker.conf (auto-detected)
 #   MOONRAKER_COMPONENTS moonraker/components dir             (auto-detected)
 #   MOONRAKER_PLATFORM   'embedded' or 'standard'             (auto-detected)
+#   NGINX_BIN            nginx executable                     (auto-detected)
+#   NGINX_CONF           main nginx.conf                      (auto-detected)
 #   REPO_PATH            where to clone this repo             (beside printer_data)
 #   REPO_URL             git origin
 #   REPO_BRANCH          branch to install from               (main)
 #   MOONRAKER_SERVICE    systemd service name                 (moonraker)
+#
+# The optional web comparison UI + nginx site (port 4410) is opt-in: set
+# INSTALL_WEB_UI=yes to install it non-interactively, INSTALL_WEB_UI=no to
+# always skip it, or leave unset to be prompted when run from a terminal
+# (skipped by default when run non-interactively, e.g. via curl|sh).
 set -eu
 
 REPO_URL="${REPO_URL:-https://github.com/jhyland87/moonraker-contrast.git}"
@@ -382,7 +389,233 @@ primary_branch: ${REPO_BRANCH}
 managed_services: moonraker
 install_script: install.sh"
 
-# --- 9. Restart Moonraker ----------------------------------------------------
+# --- 9. Optionally install the web comparison UI + nginx site ---------------
+# Opt-in and gated behind a prompt: this is the only step that touches a
+# shared, non-Moonraker config file (nginx.conf), so it never runs silently.
+should_install_web_ui() {
+    case "${INSTALL_WEB_UI:-}" in
+        yes|YES|y|Y) return 0 ;;
+        no|NO|n|N)   return 1 ;;
+    esac
+    # -t 0 alone isn't enough: this script is normally invoked via
+    # `curl ... | sh`, where fd 0 is the piped script itself, not a
+    # keyboard. Read the actual answer from the controlling terminal.
+    if [ -t 0 ] && [ -r /dev/tty ]; then
+        printf '[contrast] Install the web comparison UI and wire it into nginx? [y/N]: ' > /dev/tty 2>/dev/null || return 1
+        IFS= read -r answer < /dev/tty 2>/dev/null || return 1
+        case "$answer" in
+            y|Y|yes|YES) return 0 ;;
+            *)           return 1 ;;
+        esac
+    fi
+    warn "Non-interactive install; skipping web UI/nginx wiring."
+    warn "Re-run with INSTALL_WEB_UI=yes to install it, or re-run this script interactively."
+    return 1
+}
+
+detect_nginx_bin() {
+    if [ -n "${NGINX_BIN:-}" ]; then echo "$NGINX_BIN"; return 0; fi
+    found="$(command -v nginx 2>/dev/null || true)"
+    if [ -n "$found" ]; then echo "$found"; return 0; fi
+    for cand in /usr/data/nginx/sbin/nginx /usr/sbin/nginx /usr/local/nginx/sbin/nginx /usr/local/sbin/nginx; do
+        [ -x "$cand" ] && { echo "$cand"; return 0; }
+    done
+    return 1
+}
+
+nginx_conf_candidates() {
+    if [ "$PLATFORM" = "embedded" ]; then
+        printf '%s\n' /usr/data/nginx/nginx.conf /usr/data/nginx/conf/nginx.conf /etc/nginx/nginx.conf
+    else
+        printf '%s\n' /etc/nginx/nginx.conf /usr/local/etc/nginx/nginx.conf /usr/data/nginx/nginx.conf
+    fi
+}
+
+# Mirrors probe_moonraker_cmdline's approach, but for nginx's own master
+# process (`nginx: master process ... -c <path>`).
+probe_nginx_conf_from_ps() {
+    ps_out="$(ps -ef 2>/dev/null || true)"
+    [ -n "$ps_out" ] || ps_out="$(ps w 2>/dev/null || true)"
+    [ -n "$ps_out" ] || ps_out="$(ps 2>/dev/null || true)"
+    line="$(printf '%s\n' "$ps_out" | grep -E 'nginx: master process' | head -n1 || true)"
+    [ -n "$line" ] || return 0
+    field="$(printf '%s' "$line" | grep -oE -- '-c[[:space:]]+[^ ]+' | head -n1 || true)"
+    [ -n "$field" ] || return 0
+    field="${field#-c}"
+    while :; do
+        case "$field" in
+            " "*|"	"*) field="${field#?}" ;;
+            *) break ;;
+        esac
+    done
+    printf '%s' "$field"
+}
+
+detect_nginx_conf() {
+    if [ -n "${NGINX_CONF:-}" ]; then echo "$NGINX_CONF"; return 0; fi
+    probed="$(probe_nginx_conf_from_ps)"
+    if [ -n "$probed" ] && [ -f "$probed" ]; then echo "$probed"; return 0; fi
+    nb="$(detect_nginx_bin 2>/dev/null || true)"
+    if [ -n "$nb" ] && [ -x "$nb" ]; then
+        compiled="$("$nb" -V 2>&1 | grep -oE -- '--conf-path=[^ ]+' | head -n1 || true)"
+        compiled="${compiled#--conf-path=}"
+        if [ -n "$compiled" ] && [ -f "$compiled" ]; then echo "$compiled"; return 0; fi
+    fi
+    found=""
+    while IFS= read -r cand; do
+        [ -n "$cand" ] || continue
+        if [ -f "$cand" ]; then found="$cand"; break; fi
+    done <<EOF
+$(nginx_conf_candidates)
+EOF
+    if [ -z "$found" ]; then
+        while IFS= read -r root; do
+            [ -d "$root" ] || continue
+            hit="$(find "$root" -maxdepth 4 -name nginx.conf 2>/dev/null | head -n1 || true)"
+            if [ -n "$hit" ]; then found="$hit"; break; fi
+        done <<EOF
+$(search_roots)
+EOF
+    fi
+    [ -n "$found" ] || return 1
+    echo "$found"
+}
+
+# Reuse an already-present conf.d-style include (common out-of-the-box on
+# stock Debian) rather than deriving+inserting a second, differently-pathed
+# one; only fall back to deriving a new dir when nothing matches.
+resolve_confd_dir() {
+    match="$(grep -oE 'include[[:space:]]+[^ ;]*/conf\.d/\*\.conf;' "$NGINX_CONF" 2>/dev/null | head -n1 || true)"
+    if [ -n "$match" ]; then
+        path_part="${match#include}"
+        while :; do
+            case "$path_part" in
+                " "*|"	"*) path_part="${path_part#?}" ;;
+                *) break ;;
+            esac
+        done
+        echo "${path_part%/conf.d/\*.conf;}/conf.d"
+    else
+        echo "$(dirname "$NGINX_CONF")/conf.d"
+    fi
+}
+
+# Grep-guarded, single-line insert right after `http {`. Uses awk (not GNU
+# `sed -i`/`head -n -1`, neither safe under busybox ash) and always backs up
+# nginx.conf first -- this is shared infrastructure also serving
+# Fluidd/Mainsail, so a bad edit must be recoverable.
+ensure_confd_include() {
+    confd="$1"
+    if grep -Eq 'include[[:space:]]+[^ ;]*/conf\.d/\*\.conf;' "$NGINX_CONF" 2>/dev/null; then
+        log "nginx.conf already includes a conf.d glob, skipping insert"
+        return 0
+    fi
+    maybe_sudo mkdir -p "$confd" || { warn "could not create ${confd}"; return 1; }
+    NGINX_CONF_BACKUP="${NGINX_CONF}.contrast-bak.$(date +%s)"
+    maybe_sudo cp "$NGINX_CONF" "$NGINX_CONF_BACKUP" || { warn "could not back up ${NGINX_CONF}; skipping nginx wiring"; return 1; }
+    # Written outside nginx.conf's own dir (which may need root to write)
+    # then moved into place with maybe_sudo.
+    tmp="${REPO_PATH}/.nginx-conf-tmp.$$"
+    awk -v inc="    include ${confd}/*.conf;" '
+        { print }
+        !done && $0 ~ /^[[:space:]]*http[[:space:]]*\{[[:space:]]*$/ { print inc; done=1 }
+    ' "$NGINX_CONF" > "$tmp" || { warn "awk rewrite of ${NGINX_CONF} failed"; rm -f "$tmp"; return 1; }
+    if ! grep -qF "include ${confd}/*.conf;" "$tmp"; then
+        warn "could not find an 'http {' line in ${NGINX_CONF}; leaving it untouched"
+        rm -f "$tmp"
+        return 1
+    fi
+    if ! maybe_sudo cp "$tmp" "$NGINX_CONF"; then
+        warn "could not write ${NGINX_CONF}"
+        rm -f "$tmp"
+        return 1
+    fi
+    rm -f "$tmp"
+    log "Inserted conf.d include into ${NGINX_CONF} (backup: ${NGINX_CONF_BACKUP})"
+    return 0
+}
+
+# Entirely our own file -- always safe to regenerate, unlike nginx.conf itself.
+render_site_conf() {
+    confd="$1"
+    template="${REPO_PATH}/nginx/moonraker-contrast.conf.template"
+    dest="${confd}/moonraker-contrast.conf"
+    [ -f "$template" ] || { warn "template not found: ${template}"; return 1; }
+    tmp="${REPO_PATH}/.nginx-site-tmp.$$"
+    sed "s|__WEB_ROOT__|${REPO_PATH}/web|g" "$template" > "$tmp" || { rm -f "$tmp"; return 1; }
+    if ! maybe_sudo cp "$tmp" "$dest"; then
+        warn "could not write ${dest}"
+        rm -f "$tmp"
+        return 1
+    fi
+    rm -f "$tmp"
+    log "Wrote ${dest}"
+}
+
+# Validates the *complete* effective config (both the include-insert and the
+# new site file) in one pass; on failure, undoes both so a bad edit can never
+# leave the existing Fluidd/Mainsail sites broken.
+validate_and_finalize_nginx() {
+    site_file="$1"
+    if maybe_sudo "$NGINX_BIN" -t -c "$NGINX_CONF" >/dev/null 2>&1; then
+        log "nginx config validated OK"
+        return 0
+    fi
+    warn "nginx -t failed after wiring in the web UI; rolling back"
+    if [ -n "${NGINX_CONF_BACKUP:-}" ] && [ -f "$NGINX_CONF_BACKUP" ]; then
+        if maybe_sudo cp "$NGINX_CONF_BACKUP" "$NGINX_CONF"; then
+            warn "restored ${NGINX_CONF} from ${NGINX_CONF_BACKUP}"
+        else
+            warn "could not restore ${NGINX_CONF} -- please restore it manually from ${NGINX_CONF_BACKUP}"
+        fi
+    fi
+    maybe_sudo rm -f "$site_file" || true
+    warn "Web UI not installed; existing nginx sites left as they were."
+    return 1
+}
+
+reload_nginx_initd() {
+    for unit in /etc/init.d/S50nginx /etc/init.d/nginx; do
+        [ -x "$unit" ] || continue
+        log "Reloading ${unit}"
+        maybe_sudo "$unit" reload 2>/dev/null && return 0
+        maybe_sudo "$unit" stop || true
+        sleep 1
+        maybe_sudo "$unit" start || return 1
+        return 0
+    done
+    return 1
+}
+
+reload_nginx_systemd() {
+    command -v systemctl >/dev/null 2>&1 || return 1
+    systemctl list-unit-files 2>/dev/null | grep -q '^nginx\.service' || return 1
+    log "Reloading nginx"
+    maybe_sudo systemctl reload nginx || maybe_sudo systemctl restart nginx || return 1
+    return 0
+}
+
+WEB_UI_INSTALLED=0
+if should_install_web_ui; then
+    NGINX_BIN="$(detect_nginx_bin)" || { warn "nginx binary not found; skipping web UI"; NGINX_BIN=""; }
+    if [ -n "$NGINX_BIN" ]; then
+        NGINX_CONF="$(detect_nginx_conf)" || { warn "nginx.conf not found; skipping web UI"; NGINX_CONF=""; }
+    fi
+    if [ -n "${NGINX_CONF:-}" ]; then
+        CONFD="$(resolve_confd_dir)"
+        if ensure_confd_include "$CONFD"; then
+            if render_site_conf "$CONFD"; then
+                if validate_and_finalize_nginx "${CONFD}/moonraker-contrast.conf"; then
+                    reload_nginx_initd || reload_nginx_systemd \
+                        || warn "Could not reload nginx; restart it manually to load the web UI."
+                    WEB_UI_INSTALLED=1
+                fi
+            fi
+        fi
+    fi
+fi
+
+# --- 10. Restart Moonraker ----------------------------------------------------
 restart_initd() {
     for unit in /etc/init.d/S*moonraker* /etc/init.d/moonraker; do
         [ -x "$unit" ] || continue
@@ -448,3 +681,6 @@ done
 log "Done. Test it:"
 log "  curl -X POST 'http://localhost:7125/server/slicer/compare' -H 'Content-Type: application/json' -d '{\"file1\":\"${SLICER_CMP_FILE1}\",\"file2\":\"${SLICER_CMP_FILE2}\"}' | jq ."
 log "  curl -X POST 'http://localhost:7125/server/config/compare' -H 'Content-Type: application/json' -d '{\"file1\":\"printer.cfg\",\"file2\":\"${CONFIG_CMP_FILE2}\"}' | jq ."
+if [ "$WEB_UI_INSTALLED" = "1" ]; then
+    log "Web comparison UI: http://localhost:4410/  (or http://<printer-ip>:4410/)"
+fi
