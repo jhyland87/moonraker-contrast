@@ -1,5 +1,8 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+# >=64 for PEP 660 `build_editable` support -- below that, `pip install -e`
+# silently falls back to a legacy `setup.py develop` shim that can't read
+# this file's `[project]` metadata and installs the package as "UNKNOWN 0.0.0".
+requires = ["setuptools>=64"]
 build-backend = "setuptools.build_meta"
 
 [project]

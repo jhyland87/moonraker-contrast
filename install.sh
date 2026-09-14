@@ -299,6 +299,14 @@ run_pip() {
 # still importable, but pip's own deprecation notice says the legacy fallback
 # itself goes away in a future release, at which point the install would fail
 # outright instead of just mislabeling itself).
+#
+# By default `pip install -e` builds through a throwaway *isolated* build
+# environment, resolved fresh from `[build-system] requires` in
+# pyproject.toml -- upgrading setuptools here in the target venv wouldn't
+# reach that isolated env at all. So: make sure the target venv's own
+# setuptools is >=64, then pass --no-build-isolation so pip builds with the
+# venv's tools directly instead of resolving a separate (possibly older,
+# e.g. from a lagging piwheels-style index) setuptools just for the build.
 setuptools_major="$("$PY" -c 'import setuptools; print(setuptools.__version__.split(".")[0])' 2>/dev/null || echo 0)"
 if [ "${setuptools_major:-0}" -lt 64 ] 2>/dev/null; then
     log "Upgrading setuptools in ${VENV} (>=64 needed for a proper editable install)"
@@ -307,7 +315,7 @@ fi
 
 # Editable install so git pull updates take effect without reinstalling.
 log "Installing moonraker_contrast into ${VENV}"
-run_pip install -e "$REPO_PATH"
+run_pip install --no-build-isolation -e "$REPO_PATH"
 pip_status=$?
 if [ "$pip_status" -eq 127 ]; then
     warn "No pip found in ${VENV}"
