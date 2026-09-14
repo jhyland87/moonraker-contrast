@@ -1,7 +1,7 @@
 #!/bin/sh
 # moonraker-contrast installer (idempotent, safe to re-run).
 #
-#   curl -sSL https://raw.githubusercontent.com/jhyland87/moonraker-contrast/v2/install.sh | sh
+#   curl -sSL https://raw.githubusercontent.com/jhyland87/moonraker-contrast/main/install.sh | sh
 #
 # Works on a standard Debian/Raspberry Pi Klipper install and on embedded
 # printers running the Creality Helper Script (K1/K1C/K2, Buildroot + init.d),
@@ -16,14 +16,12 @@
 #   MOONRAKER_PLATFORM   'embedded' or 'standard'             (auto-detected)
 #   REPO_PATH            where to clone this repo             (beside printer_data)
 #   REPO_URL             git origin
-#   REPO_BRANCH          branch to install from               (v2)
+#   REPO_BRANCH          branch to install from               (main)
 #   MOONRAKER_SERVICE    systemd service name                 (moonraker)
 set -eu
 
 REPO_URL="${REPO_URL:-https://github.com/jhyland87/moonraker-contrast.git}"
-# TEMPORARY: v2 lives on its own branch. Once v2 merges to main, drop REPO_BRANCH
-# and revert the checkout step + primary_branch below back to main.
-REPO_BRANCH="${REPO_BRANCH:-v2}"
+REPO_BRANCH="${REPO_BRANCH:-main}"
 MOONRAKER_SERVICE="${MOONRAKER_SERVICE:-moonraker}"
 OS_RELEASE_FILE="${OS_RELEASE_FILE:-/etc/os-release}"
 MAPPING_NAME="slicer_mappings.cfg"
