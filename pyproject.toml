@@ -5,13 +5,13 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "moonraker-contrast"
 version = "0.1.0"
-description = "Compare the slicer settings embedded in two gcode files, exposed as a Moonraker API plugin."
+description = "Compare the slicer settings embedded in two gcode files, or two Klipper/Moonraker config files, exposed as a Moonraker API plugin."
 readme = "README.md"
 requires-python = ">=3.8"
 license = { text = "GPL-3.0-or-later" }
 authors = [{ name = "jhyland87" }]
-keywords = ["moonraker", "klipper", "3d-printing", "gcode", "slicer", "prusaslicer", "orcaslicer", "bambustudio"]
-# stdlib only (re, configparser, pathlib, gzip) - keeps the Moonraker venv clean.
+keywords = ["moonraker", "klipper", "3d-printing", "gcode", "slicer", "prusaslicer", "orcaslicer", "bambustudio", "config"]
+# stdlib only (re, configparser, pathlib, gzip, difflib) - keeps the Moonraker venv clean.
 dependencies = []
 
 [project.optional-dependencies]

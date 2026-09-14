@@ -7,8 +7,10 @@ Pure-stdlib library. The Moonraker component shim (installed separately into
 from __future__ import annotations
 
 from .api import MappingStore, compare_files, load_mappings, scan_file
+from .config_api import compare_config_files, scan_config_file
 from .errors import (
     ConfigBlockNotFoundError,
+    ConfigParseError,
     ContrastError,
     MappingLoadError,
     UnsupportedSlicerError,
@@ -22,8 +24,11 @@ __all__ = [
     "scan_file",
     "load_mappings",
     "MappingStore",
+    "compare_config_files",
+    "scan_config_file",
     "ContrastError",
     "UnsupportedSlicerError",
     "ConfigBlockNotFoundError",
     "MappingLoadError",
+    "ConfigParseError",
 ]

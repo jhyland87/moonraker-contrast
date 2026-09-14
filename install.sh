@@ -304,11 +304,16 @@ if ! "$PY" -c 'import moonraker_contrast' >/dev/null 2>&1; then
         || die "moonraker_contrast is still not importable by ${PY}"
 fi
 
-# --- 6. Symlink the component shim -------------------------------------------
+# --- 6. Symlink the component shims -------------------------------------------
 SHIM_SRC="${REPO_PATH}/component/slicer_compare.py"
 [ -f "$SHIM_SRC" ] || die "Shim not found at ${SHIM_SRC}"
 ln -sf "$SHIM_SRC" "${COMPONENTS}/slicer_compare.py"
 log "Linked component -> ${COMPONENTS}/slicer_compare.py"
+
+CONFIG_SHIM_SRC="${REPO_PATH}/component/config_compare.py"
+[ -f "$CONFIG_SHIM_SRC" ] || die "Shim not found at ${CONFIG_SHIM_SRC}"
+ln -sf "$CONFIG_SHIM_SRC" "${COMPONENTS}/config_compare.py"
+log "Linked component -> ${COMPONENTS}/config_compare.py"
 
 # --- 7. Install default mapping (never clobber user edits) -------------------
 if [ -f "${CONFIG}/${MAPPING_NAME}" ]; then
@@ -333,6 +338,9 @@ add_section() {
 
 add_section "slicer_compare" "[slicer_compare]
 mapping_path: ${CONFIG}/${MAPPING_NAME}
+float_tolerance: 1e-6"
+
+add_section "config_compare" "[config_compare]
 float_tolerance: 1e-6"
 
 add_section "update_manager moonraker-contrast" "[update_manager moonraker-contrast]
@@ -376,3 +384,4 @@ fi
 
 log "Done. Test it:"
 log "  curl -s -X POST 'http://localhost:7125/server/slicer/compare' -H 'Content-Type: application/json' -d '{\"file1\":\"a.gcode\",\"file2\":\"b.gcode\"}' | jq ."
+log "  curl -s -X POST 'http://localhost:7125/server/config/compare' -H 'Content-Type: application/json' -d '{\"file1\":\"printer.cfg\",\"file2\":\"printer-20250101_000000.cfg\"}' | jq ."

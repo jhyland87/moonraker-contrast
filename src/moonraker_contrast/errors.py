@@ -40,3 +40,9 @@ class MappingLoadError(ContrastError):
     """
 
     http_status = 500
+
+
+class ConfigParseError(ContrastError):
+    """Raised when a Klipper/Moonraker-style config file cannot be parsed as INI."""
+
+    http_status = 422

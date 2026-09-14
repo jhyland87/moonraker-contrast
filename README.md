@@ -1,8 +1,9 @@
 # moonraker-contrast
 
 A [Moonraker](https://github.com/Arksine/moonraker) plugin that compares the
-**slicer settings** embedded in two gcode files stored on your printer and
-returns a `diff`-style result over Moonraker's HTTP **and** websocket API.
+**slicer settings** embedded in two gcode files, or two Klipper/Moonraker
+**config files** (`printer.cfg`, `moonraker.conf`, etc.), stored on your printer
+and returns a `diff`-style result over Moonraker's HTTP **and** websocket API.
 
 It understands the slic3r-engine family of slicers — **PrusaSlicer,
 SuperSlicer, OrcaSlicer, BambuStudio, BambuSlicer** — including the fact that
@@ -34,11 +35,11 @@ The installer is idempotent (safe to re-run). It:
    `/usr/data/moonraker-contrast` on a Creality printer),
 3. `pip install -e`'s the `moonraker_contrast` library into the venv (falling
    back to a `.pth` path file where pip is too old for an editable install),
-4. symlinks the component into `moonraker/components/`,
+4. symlinks both components into `moonraker/components/`,
 5. installs a default `slicer_mappings.cfg` into your config dir (never
    overwriting an existing one),
-6. adds `[slicer_compare]` and an `[update_manager moonraker-contrast]` section
-   to `moonraker.conf`,
+6. adds `[slicer_compare]`, `[config_compare]`, and an
+   `[update_manager moonraker-contrast]` section to `moonraker.conf`,
 7. restarts Moonraker (`systemctl` on a standard host,
    `/etc/init.d/S56moonraker_service` on a Creality printer).
 
@@ -97,6 +98,78 @@ file — handy for debugging mappings.
 Websocket equivalents use the derived method names `server.slicer.compare` and
 `server.slicer.settings`.
 
+## Comparing config files
+
+A separate resource compares two Klipper/Moonraker config files (`printer.cfg`,
+`moonraker.conf`, `gcode_macro.cfg`, SAVE_CONFIG backups, etc.) instead of gcode.
+
+### `POST /server/config/compare`
+
+| param   | type   | notes                                                    |
+| ------- | ------ | --------------------------------------------------------- |
+| `file1` | string | config path relative to the config root                   |
+| `file2` | string | config path relative to the config root                   |
+| `mode`  | string | `"values"` (default) or `"raw"`                            |
+
+`mode=values` parses both files as INI and diffs the settings — files that only
+differ in comments, whitespace, or section ordering report **no** differences.
+This also means Klipper's auto-generated `#*# <SAVE_CONFIG>` calibration block is
+ignored, since those lines are `#*#`-prefixed comments as far as the INI parser
+is concerned.
+
+> A `# comment` appended directly after a value on the *same* line (no leading
+> section header) is only stripped when it starts its own line — a trailing
+> same-line comment becomes part of the parsed value, so `values` mode can flag
+> a line as "changed" if only that trailing comment differs.
+
+```sh
+curl -s -X POST 'http://PRINTER:7125/server/config/compare' \
+  -H 'Content-Type: application/json' \
+  -d '{"file1":"printer-20250801_203831.cfg","file2":"printer.cfg"}' | jq .
+```
+
+Response (abridged):
+
+```json
+{
+  "left":  {"file":"printer-20250801_203831.cfg","sections":42,"options":210},
+  "right": {"file":"printer.cfg","sections":45,"options":225},
+  "mode": "values",
+  "summary": {"same":198,"changed":6,"only_left":6,"only_right":21},
+  "changed": {
+    "extruder.pressure_advance": {"left":0.04,"right":0.06}
+  },
+  "only_left":  {"...": "..."},
+  "only_right": {"...": "..."},
+  "same_keys": ["mcu.serial", "..."]
+}
+```
+
+`mode=raw` skips parsing entirely and returns a literal unified text diff — every
+comment, blank line, and reordered section counts:
+
+```json
+{
+  "left": {"file":"printer-20250801_203831.cfg"},
+  "right": {"file":"printer.cfg"},
+  "mode": "raw",
+  "raw": {
+    "identical": false,
+    "diff": "--- printer-20250801_203831.cfg\n+++ printer.cfg\n@@ ...",
+    "lines_added": 34,
+    "lines_removed": 12
+  }
+}
+```
+
+### `GET /server/config/settings?file=printer.cfg`
+
+Returns the flattened `"section.option": value` view for a single config file —
+handy for debugging.
+
+Websocket equivalents use the derived method names `server.config.compare` and
+`server.config.settings`.
+
 ## Adding / changing setting mappings
 
 Edit `slicer_mappings.cfg` in your config dir — `~/printer_data/config/` on a
@@ -126,9 +199,9 @@ python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
 .venv/bin/python -m pytest
 ```
 
-The Moonraker component (`component/slicer_compare.py`) is a thin shim — it
-resolves filenames via `file_manager`, reads its config, and calls the library
-— so almost all logic lives in the testable package.
+Each Moonraker component (`component/slicer_compare.py`, `component/config_compare.py`)
+is a thin shim — it resolves filenames via `file_manager`, reads its config, and
+calls the library — so almost all logic lives in the testable package.
 
 ## License
 
